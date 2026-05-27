@@ -32,6 +32,10 @@ def create_app() -> Flask:
     # All routes inside routes.py will start with /api
     app.register_blueprint(api, url_prefix="/api")
 
+    # Ensure tables exist for local development/demo usage.
+    with app.app_context():
+        db.create_all()
+
     # HEALTH CHECK ROUTE
     # Used to check if backend server is running
     @app.get("/health")

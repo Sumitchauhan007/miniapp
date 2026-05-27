@@ -19,3 +19,6 @@ class Config:
 
     # Allow frontend requests
     CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*")
+
+    # Enable demo data seeding for local development.
+    DEMO_MODE = os.getenv("DEMO_MODE", "true").lower() in {"1", "true", "yes"}

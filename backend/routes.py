@@ -1,6 +1,7 @@
 from datetime import datetime
+import random
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, current_app, jsonify, request
 from sqlalchemy import func
 
 from models import (
@@ -43,6 +44,47 @@ def error(message: str, status: int = 400):
     return jsonify({"success": False, "message": message}), status
 
 
+def ensure_demo_data() -> None:
+    if not current_app.config.get("DEMO_MODE", False):
+        return
+
+    has_entries = LeaderboardEntry.query.first() is not None
+    has_games = Game.query.first() is not None
+    has_users = User.query.first() is not None
+    if has_entries and has_games and has_users:
+        return
+
+    if not has_games:
+        for name in ("PUBG", "COD", "BGMI", "Valorant"):
+            db.session.add(Game(name=name))
+
+    if not has_users:
+        for name in ("Nova", "Zane", "Lyra", "Kai", "Rhea"):
+            db.session.add(User(display_name=name))
+
+    db.session.flush()
+
+    if not has_entries:
+        games = Game.query.all()
+        users = User.query.all()
+        for game in games:
+            for user in users:
+                score = random.randint(50, 200)
+                db.session.add(
+                    LeaderboardEntry(
+                        user_id=user.id,
+                        game_id=game.id,
+                        highest_score=score,
+                        saved_at=datetime.utcnow(),
+                    )
+                )
+
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+
 def build_leaderboard(game: Game, limit: int | None) -> dict:
     query = (
         LeaderboardEntry.query.filter_by(game_id=game.id)
@@ -68,17 +110,31 @@ def build_leaderboard(game: Game, limit: int | None) -> dict:
 
 
 def build_global_leaderboard(limit: int | None) -> list[dict]:
-    # Join leaderboard entries with users and games for a single global list.
+    # One row per user, keeping only their best score across all games.
+    max_scores = (
+        db.session.query(
+            LeaderboardEntry.user_id.label("user_id"),
+            func.max(LeaderboardEntry.highest_score).label("max_score"),
+        )
+        .group_by(LeaderboardEntry.user_id)
+        .subquery()
+    )
+
     query = (
         db.session.query(LeaderboardEntry, User, Game)
         .join(User, LeaderboardEntry.user_id == User.id)
         .join(Game, LeaderboardEntry.game_id == Game.id)
+        .join(
+            max_scores,
+            (LeaderboardEntry.user_id == max_scores.c.user_id)
+            & (LeaderboardEntry.highest_score == max_scores.c.max_score),
+        )
         .order_by(LeaderboardEntry.highest_score.desc(), LeaderboardEntry.saved_at.desc())
     )
-    if limit:
-        query = query.limit(limit)
 
     rows = query.all()
+    if limit:
+        rows = rows[:limit]
     leaderboard = []
     for index, (entry, user, game) in enumerate(rows, start=1):
         leaderboard.append(
@@ -222,6 +278,7 @@ def leaderboard_by_game(game_name: str):
 @api.get("/leaderboard")
 def leaderboard_global():
     # Global leaderboard across all games.
+    ensure_demo_data()
     limit = request.args.get("limit", type=int)
     return success("Leaderboard fetched successfully", build_global_leaderboard(limit))
 
